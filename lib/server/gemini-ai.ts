@@ -220,6 +220,9 @@ async function requestGeminiJson<T>(prompt: string, maxOutputTokens: number) {
   const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 4000); // 4 second timeout for Gemini
+
   try {
     const response = await fetch(endpoint, {
       method: "POST",
@@ -239,7 +242,8 @@ async function requestGeminiJson<T>(prompt: string, maxOutputTokens: number) {
           maxOutputTokens,
           responseMimeType: "application/json"
         }
-      })
+      }),
+      signal: controller.signal
     });
 
     const payload = (await response.json().catch(() => ({}))) as GeminiResponse & {
@@ -269,6 +273,8 @@ async function requestGeminiJson<T>(prompt: string, maxOutputTokens: number) {
       error instanceof Error ? error.message : error
     );
     return null;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

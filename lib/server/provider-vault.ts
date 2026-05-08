@@ -299,6 +299,26 @@ export async function updateConnectionSyncStats({
   );
 }
 
+export async function deleteProviderToken(userId: string, providerId: ConnectorProviderId) {
+  await ensureSchema();
+  await getDb().query(
+    `DELETE FROM provider_tokens WHERE user_id = $1 AND provider_id = $2`,
+    [userId, providerId]
+  );
+}
+
+export async function disconnectProvider(userId: string, providerId: ConnectorProviderId) {
+  await ensureSchema();
+  await getDb().query(
+    `DELETE FROM provider_tokens WHERE user_id = $1 AND provider_id = $2`,
+    [userId, providerId]
+  );
+  await getDb().query(
+    `DELETE FROM provider_connections WHERE user_id = $1 AND provider_id = $2`,
+    [userId, providerId]
+  );
+}
+
 export async function deleteConnection(userId: string, providerId: ConnectorProviderId) {
   await ensureSchema();
   await getDb().query(`DELETE FROM provider_tokens WHERE user_id = $1 AND provider_id = $2`, [

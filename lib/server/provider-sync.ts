@@ -97,14 +97,19 @@ export async function syncProviderSignals(
   providerId: ConnectorProviderId,
   token: StoredToken
 ): Promise<PriorityItem[]> {
-  const signals =
-    providerId === "gmail"
-      ? await syncGmail(token.accessToken)
-      : providerId === "google-calendar"
-        ? await syncGoogleCalendar(token.accessToken)
-        : await syncGoogleTasks(token.accessToken);
+  try {
+    const signals =
+      providerId === "gmail"
+        ? await syncGmail(token.accessToken)
+        : providerId === "google-calendar"
+          ? await syncGoogleCalendar(token.accessToken)
+          : await syncGoogleTasks(token.accessToken);
 
-  return enrichSignalsWithGemini(signals, `${providerId} sync`);
+    return enrichSignalsWithGemini(signals, `${providerId} sync`);
+  } catch (error) {
+    console.error(`[Provider Sync] Failed to sync ${providerId}:`, error instanceof Error ? error.message : error);
+    throw error;
+  }
 }
 
 async function syncGmail(accessToken: string): Promise<PriorityItem[]> {
@@ -221,17 +226,25 @@ async function syncGoogleTasks(accessToken: string): Promise<PriorityItem[]> {
 }
 
 async function googleJson<T>(url: string, accessToken: string): Promise<T> {
-  const response = await fetch(url, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-    cache: "no-store"
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000); // 8 second timeout per request
+  
+  try {
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      cache: "no-store",
+      signal: controller.signal
+    });
 
-  if (!response.ok) {
-    const error = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
-    throw new Error(error.error?.message ?? `Google API sync failed with status ${response.status}.`);
+    if (!response.ok) {
+      const error = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
+      throw new Error(error.error?.message ?? `Google API sync failed with status ${response.status}.`);
+    }
+
+    return response.json() as Promise<T>;
+  } finally {
+    clearTimeout(timeout);
   }
-
-  return response.json() as Promise<T>;
 }
 
 function header(headers: Array<{ name: string; value: string }>, name: string) {
