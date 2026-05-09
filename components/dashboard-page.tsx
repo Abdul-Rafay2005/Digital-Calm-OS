@@ -90,6 +90,36 @@ const platformCopy: Record<Platform, { name: string; icon: LucideIcon; tone: str
   Trello: { name: "Tasks", icon: Inbox, tone: "text-calm-cyan" }
 };
 
+type LoadAnalyticsPoint = {
+  label: string;
+  pressure: number;
+  focus: number;
+};
+
+function clampLoadChart(value: number) {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function buildLoadAnalyticsData(
+  signals: PriorityItem[],
+  loadScore: number,
+  focusScore: number
+): LoadAnalyticsPoint[] {
+  const signalCount = signals.length;
+  const averagePriority = signalCount
+    ? signals.reduce((sum, signal) => sum + signal.priority, 0) / signalCount
+    : 50;
+  const pressureBase = clampLoadChart(42 + signalCount * 8 + (averagePriority - 50) * 0.3);
+  const focusBase = clampLoadChart(focusScore);
+
+  return [
+    { label: "Now", pressure: clampLoadChart(pressureBase), focus: clampLoadChart(focusBase - 8) },
+    { label: "30m", pressure: clampLoadChart(pressureBase + 5), focus: clampLoadChart(focusBase - 2) },
+    { label: "1h", pressure: clampLoadChart(pressureBase + 10), focus: clampLoadChart(focusBase + 3) },
+    { label: "2h", pressure: clampLoadChart(pressureBase + 6), focus: clampLoadChart(focusBase + 6) }
+  ];
+}
+
 const priorityTone: Record<PriorityLabel, "rose" | "amber" | "cyan" | "default" | "violet"> = {
   Critical: "rose",
   Important: "amber",
@@ -219,6 +249,10 @@ export function DashboardPage() {
   const loadScore = Math.max(12, 78 - connectedCount * 10 - hiddenCount * 2 - (focusMode ? 16 : 0));
   const productivityScore = Math.min(98, 66 + connectedCount * 7 + importantCount * 2 + (focusMode ? 8 : 0));
   const focusScore = Math.min(99, 60 + connectedCount * 8 + hiddenCount * 3 + (focusMode ? 12 : 0));
+  const loadAnalyticsData = useMemo(
+    () => buildLoadAnalyticsData(visibleSignals, loadScore, focusScore),
+    [visibleSignals, loadScore, focusScore]
+  );
   const activeBriefing = briefing ?? createClientBriefing(signals);
 
   return (
@@ -282,6 +316,7 @@ export function DashboardPage() {
                 focusScore={focusScore}
                 loadScore={loadScore}
                 productivityScore={productivityScore}
+                data={loadAnalyticsData}
               />
             </div>
 
@@ -664,11 +699,13 @@ function DailyBriefingPanel({
 function CognitiveLoadPanel({
   focusScore,
   loadScore,
-  productivityScore
+  productivityScore,
+  data
 }: {
   focusScore: number;
   loadScore: number;
   productivityScore: number;
+  data: LoadAnalyticsPoint[];
 }) {
   return (
     <Card className="overflow-hidden rounded-[1.75rem]">
@@ -688,7 +725,7 @@ function CognitiveLoadPanel({
           <Metric label="Focus" tone="cyan" value={focusScore} />
         </div>
         <div className="rounded-2xl border border-white/9 bg-black/22 p-3">
-          <LoadAreaChart />
+          <LoadAreaChart data={data} />
         </div>
       </CardContent>
     </Card>
@@ -814,7 +851,7 @@ function FocusAndRecommendationsPanel({
         </CardHeader>
         <CardContent>
           <div className="mb-5 rounded-2xl border border-white/9 bg-black/22 p-3">
-            <PlatformBarChart />
+            <PlatformBarChart signals={signals} />
           </div>
           <div className="space-y-4">
             {providerIds.map((providerId) => {

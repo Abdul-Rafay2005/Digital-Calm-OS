@@ -18,6 +18,18 @@ type GeminiResponse = {
   };
 };
 
+type GeminiRequestBody = {
+  contents: Array<{
+    role: "user";
+    parts: Array<{ text: string }>;
+  }>;
+  generationConfig: {
+    temperature: number;
+    maxOutputTokens: number;
+    responseMimeType: "application/json";
+  };
+};
+
 type GeminiSignalDecision = {
   id: string;
   priority?: number;
@@ -219,63 +231,160 @@ async function requestGeminiJson<T>(prompt: string, maxOutputTokens: number) {
 
   const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  const requestBody: GeminiRequestBody = {
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: prompt }]
+      }
+    ],
+    generationConfig: {
+      temperature: 0.22,
+      maxOutputTokens,
+      responseMimeType: "application/json"
+    }
+  };
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 4000); // 4 second timeout for Gemini
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const text = await requestGeminiText(endpoint, apiKey, requestBody);
+      if (!text) {
+        return null;
+      }
 
-  try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: "user",
-            parts: [{ text: prompt }]
-          }
-        ],
-        generationConfig: {
-          temperature: 0.22,
-          maxOutputTokens,
-          responseMimeType: "application/json"
-        }
-      }),
-      signal: controller.signal
-    });
+      const parsed = tryParseJson<T>(text);
+      if (parsed.ok) return parsed.value;
 
-    const payload = (await response.json().catch(() => ({}))) as GeminiResponse & {
-      error?: { message?: string };
-    };
+      console.warn("[Digital Calm OS] Gemini returned invalid JSON; requesting Gemini repair:", parsed.error.message);
 
-    if (!response.ok) {
-      console.warn("[Digital Calm OS] Gemini request failed:", payload.error?.message ?? response.statusText);
+      const repaired = await repairGeminiJson<T>({
+        apiKey,
+        endpoint,
+        invalidJson: text,
+        maxOutputTokens
+      });
+      if (repaired) return repaired;
+
+      requestBody.contents[0].parts[0].text = [
+        prompt,
+        "",
+        "The previous answer was rejected because it was not parseable JSON.",
+        "Return one complete, minified JSON object only. Escape every quote inside string values. Do not include comments, markdown, or trailing commas."
+      ].join("\n");
+      requestBody.generationConfig.temperature = 0;
+    } catch (error) {
+      const message = getGeminiErrorMessage(error);
+      if (attempt < 3 && isRetryableGeminiError(error)) {
+        console.warn("[Digital Calm OS] Gemini request failed; retrying:", message);
+        continue;
+      }
+
+      console.warn("[Digital Calm OS] Gemini processing fell back to local AI:", message);
       return null;
     }
-
-    const text =
-      payload.candidates?.[0]?.content?.parts
-        ?.map((part) => part.text ?? "")
-        .join("")
-        .trim() ?? "";
-
-    if (!text) {
-      console.warn("[Digital Calm OS] Gemini returned an empty response.", payload.promptFeedback?.blockReason);
-      return null;
-    }
-
-    return parseJson<T>(text);
-  } catch (error) {
-    console.warn(
-      "[Digital Calm OS] Gemini processing fell back to local AI:",
-      error instanceof Error ? error.message : error
-    );
-    return null;
-  } finally {
-    clearTimeout(timeout);
   }
+
+  return null;
+}
+
+function isRetryableGeminiStatus(status: number) {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+function isRetryableGeminiError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  return error.message.toLowerCase().includes("fetch failed") || error.message.includes("Gemini temporary failure");
+}
+
+function getGeminiErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function requestGeminiText(
+  endpoint: string,
+  apiKey: string,
+  body: GeminiRequestBody
+) {
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": apiKey
+    },
+    body: JSON.stringify(body)
+  });
+
+  const payload = (await response.json().catch(() => ({}))) as GeminiResponse & {
+    error?: { message?: string };
+  };
+
+  if (!response.ok) {
+    const message = payload.error?.message ?? response.statusText;
+    if (isRetryableGeminiStatus(response.status)) {
+      throw new Error(`Gemini temporary failure ${response.status}: ${message}`);
+    }
+
+    console.warn("[Digital Calm OS] Gemini request failed:", message);
+    return null;
+  }
+
+  const text =
+    payload.candidates?.[0]?.content?.parts
+      ?.map((part) => part.text ?? "")
+      .join("")
+      .trim() ?? "";
+
+  if (!text) {
+    console.warn("[Digital Calm OS] Gemini returned an empty response.", payload.promptFeedback?.blockReason);
+    return null;
+  }
+
+  return text;
+}
+
+async function repairGeminiJson<T>({
+  apiKey,
+  endpoint,
+  invalidJson,
+  maxOutputTokens
+}: {
+  apiKey: string;
+  endpoint: string;
+  invalidJson: string;
+  maxOutputTokens: number;
+}) {
+  const repairBody: GeminiRequestBody = {
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            text: [
+              "Repair the following malformed JSON into one valid JSON object.",
+              "Preserve the same data and keys. Do not add markdown, explanations, comments, or code fences.",
+              "Escape invalid quotes inside string values and remove trailing commas if present.",
+              "Malformed JSON:",
+              invalidJson
+            ].join("\n")
+          }
+        ]
+      }
+    ],
+    generationConfig: {
+      temperature: 0,
+      maxOutputTokens,
+      responseMimeType: "application/json"
+    }
+  };
+
+  const repairedText = await requestGeminiText(endpoint, apiKey, repairBody);
+  if (!repairedText) return null;
+
+  const parsed = tryParseJson<T>(repairedText);
+  if (parsed.ok) return parsed.value;
+
+  console.warn("[Digital Calm OS] Gemini JSON repair failed:", parsed.error.message);
+  return null;
 }
 
 function mergeGeminiDecision(signal: PriorityItem, decision?: GeminiSignalDecision) {
@@ -330,6 +439,17 @@ function parseJson<T>(text: string) {
   const end = fenced.lastIndexOf("}");
   const raw = start >= 0 && end >= start ? fenced.slice(start, end + 1) : fenced;
   return JSON.parse(raw) as T;
+}
+
+function tryParseJson<T>(text: string) {
+  try {
+    return { ok: true as const, value: parseJson<T>(text) };
+  } catch (error) {
+    return {
+      ok: false as const,
+      error: error instanceof Error ? error : new Error(String(error))
+    };
+  }
 }
 
 function sortByPriority(a: PriorityItem, b: PriorityItem) {

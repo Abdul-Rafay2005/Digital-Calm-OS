@@ -8,7 +8,6 @@ import {
   BrainCircuit,
   CalendarDays,
   CheckCircle2,
-  Command,
   Mail,
   Sparkles,
   TimerReset
