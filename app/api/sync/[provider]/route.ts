@@ -95,14 +95,14 @@ async function syncWithAuthRetry({
   token: StoredToken;
   userId: string;
 }) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 25000); // 25 second timeout for entire sync
+  const timeoutMs = getGoogleSyncTimeoutMs();
+  const retryTimeoutMs = Math.max(5_000, timeoutMs - 5_000);
 
   try {
     return await Promise.race([
       syncProviderSignals(providerId, token),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`Sync timeout for ${providerId}`)), 23000)
+        setTimeout(() => reject(new Error(`Sync timeout for ${providerId}`)), timeoutMs)
       )
     ]);
   } catch (error) {
@@ -119,16 +119,12 @@ async function syncWithAuthRetry({
     }
 
     const refreshed = await refreshAndPersistGoogleToken(userId, providerId, token.refreshToken);
-    try {
-      return await Promise.race([
-        syncProviderSignals(providerId, refreshed),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`Sync timeout for ${providerId} (retry)`)), 18000)
-        )
-      ]);
-    } finally {
-      clearTimeout(timeout);
-    }
+    return Promise.race([
+      syncProviderSignals(providerId, refreshed),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`Sync timeout for ${providerId} (retry)`)), retryTimeoutMs)
+      )
+    ]);
   }
 }
 
@@ -213,4 +209,10 @@ function isRefreshTokenExpiredError(error: unknown) {
     message.includes("invalid_grant") ||
     message.includes("refresh token") && message.includes("expired")
   );
+}
+
+function getGoogleSyncTimeoutMs() {
+  const configured = Number.parseInt(process.env.GOOGLE_SYNC_TIMEOUT_MS ?? "", 10);
+  if (Number.isFinite(configured) && configured >= 10_000) return configured;
+  return 25_000;
 }

@@ -12,7 +12,7 @@ import {
   XAxis,
   YAxis
 } from "recharts";
-import { loadAnalytics, platformSignals } from "@/lib/mock-data";
+import { loadAnalytics, type PriorityItem } from "@/lib/mock-data";
 
 const tooltipStyle = {
   background: "rgba(8, 8, 7, 0.92)",
@@ -22,15 +22,22 @@ const tooltipStyle = {
   boxShadow: "0 20px 60px rgba(0,0,0,0.4)"
 };
 
-export function LoadAreaChart() {
+type LoadAnalyticsPoint = {
+  label: string;
+  pressure: number;
+  focus: number;
+};
+
+export function LoadAreaChart({ data }: { data?: LoadAnalyticsPoint[] }) {
   const mounted = useChartMounted();
+  const chartData = data && data.length ? data : loadAnalytics;
 
   if (!mounted) return <ChartSkeleton className="h-64" />;
 
   return (
     <div className="h-64 min-h-64 min-w-0 w-full">
       <ResponsiveContainer height="100%" minHeight={0} minWidth={0} width="100%">
-        <AreaChart data={loadAnalytics} margin={{ bottom: 0, left: -18, right: 8, top: 10 }}>
+        <AreaChart data={chartData} margin={{ bottom: 0, left: -18, right: 8, top: 10 }}>
           <defs>
             <linearGradient id="pressure" x1="0" x2="0" y1="0" y2="1">
               <stop offset="5%" stopColor="#ff8eb6" stopOpacity={0.34} />
@@ -78,15 +85,37 @@ export function LoadAreaChart() {
   );
 }
 
-export function PlatformBarChart() {
+export function PlatformBarChart({ signals = [] }: { signals?: PriorityItem[] }) {
   const mounted = useChartMounted();
+
+  const platformData = ["Gmail", "Calendar", "Tasks"] as const;
+  const platformColors: Record<typeof platformData[number], string> = {
+    Gmail: "#78ffd6",
+    Calendar: "#ffe19c",
+    Tasks: "#72e9ff"
+  };
+
+  const data = platformData.map((platform) => {
+    const platformSignals = signals.filter((signal) => signal.platform === platform);
+    const count = platformSignals.length;
+    const critical = platformSignals.filter((signal) => signal.priority >= 80).length;
+    const muted = platformSignals.filter((signal) => signal.hideInFocus ?? signal.priority < 70).length;
+
+    return {
+      platform,
+      count,
+      muted,
+      critical,
+      color: platformColors[platform]
+    };
+  });
 
   if (!mounted) return <ChartSkeleton className="h-56" />;
 
   return (
     <div className="h-56 min-h-56 min-w-0 w-full">
       <ResponsiveContainer height="100%" minHeight={0} minWidth={0} width="100%">
-        <BarChart data={platformSignals} margin={{ bottom: 0, left: -18, right: 8, top: 8 }}>
+        <BarChart data={data} margin={{ bottom: 0, left: -18, right: 8, top: 8 }}>
           <CartesianGrid stroke="rgba(255,255,255,0.07)" vertical={false} />
           <XAxis
             axisLine={false}
